@@ -1,0 +1,41 @@
+---
+name: predicting-football-matches
+description: Use when the user wants a pre-match prediction or betting analysis for an upcoming football match
+---
+
+# Predicting Football Matches
+
+## Overview
+
+Pre-match analysis done honestly: **gather real data → estimate true outcome probabilities → compare them to the bookmaker's vig-free implied odds → recommend a bet ONLY where expected value is positive.**
+
+## Core Principle
+
+Value, not certainty. The only durable edge is **positive expected value (EV)**.
+
+## Workflow
+
+1. **Gather real data** - xG, injuries, form, odds
+2. **Estimate expected goals** for each side
+3. **Run the model** using `scripts/match_model.py`
+4. **Pull odds** and compute value
+5. **Size stakes** with fractional Kelly
+6. **Output recommendations**
+
+## Commands
+
+- `match_model.py outcomes` - 1X2, totals, BTTS, scorelines
+- `match_model.py value` - Compare model to odds, find +EV
+- `match_model.py asian` - Asian handicap analysis
+- `match_model.py atotals` - Asian over/under analysis
+
+## Method
+
+- Anchor on xG data, not just results
+- Use Poisson model
+- Compare model probabilities to vig-free odds
+- Only bet when edge clears safety margin (>3%)
+
+## Responsible Gambling
+
+This is probabilistic analysis, not financial advice. Bet only what you can afford to lose.

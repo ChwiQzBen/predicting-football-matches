@@ -4,20 +4,13 @@ from __future__ import annotations
 
 from pathlib import Path
 
-import numpy as np
 import pandas as pd
 
 
-ROLLING_WINDOWS = (5, 10)
+ROLLING_WINDOWS = (3, 5, 10)
 
 
 def _team_history(df: pd.DataFrame) -> pd.DataFrame:
-    """
-    Convert home/away match records into one row per team per match.
-
-    Every team's record contains only information that was available
-    from matches already played.
-    """
 
     home = pd.DataFrame({
         "date": df["date"],
@@ -48,26 +41,24 @@ def _team_history(df: pd.DataFrame) -> pd.DataFrame:
         ignore_index=True,
     )
 
-    history = history.sort_values(
+    return history.sort_values(
         ["team", "date", "match_id"]
     ).reset_index(drop=True)
 
-    return history
-
 
 def _rolling_features(history: pd.DataFrame) -> pd.DataFrame:
-    """
-    Calculate rolling features using ONLY previous matches.
-
-    shift(1) is critical: the current match can never influence
-    the features used to predict itself.
-    """
 
     history = history.copy()
 
     grouped = history.groupby("team", group_keys=False)
 
+    # Number of matches available BEFORE the current match.
+    history["matches_before"] = grouped["match_id"].transform(
+        lambda s: s.shift(1).expanding().count()
+    )
+
     for window in ROLLING_WINDOWS:
+
         history[f"xg_{window}"] = grouped["xg_for"].transform(
             lambda s: s.shift(1).rolling(
                 window,
@@ -103,11 +94,9 @@ def _rolling_features(history: pd.DataFrame) -> pd.DataFrame:
             - history[f"xga_{window}"]
         )
 
-        history[f"form_{window}"] = grouped["goals_for"].transform(
-            lambda s: s.shift(1).rolling(
-                window,
-                min_periods=1,
-            ).mean()
+        history[f"goal_xg_diff_{window}"] = (
+            history[f"goals_{window}"]
+            - history[f"xg_{window}"]
         )
 
         history[f"xg_std_{window}"] = grouped["xg_for"].transform(
@@ -121,9 +110,6 @@ def _rolling_features(history: pd.DataFrame) -> pd.DataFrame:
 
 
 def _home_away_features(history: pd.DataFrame) -> pd.DataFrame:
-    """
-    Calculate venue-specific rolling xG features.
-    """
 
     history = history.copy()
 
@@ -133,6 +119,7 @@ def _home_away_features(history: pd.DataFrame) -> pd.DataFrame:
     )
 
     for window in ROLLING_WINDOWS:
+
         history[f"venue_xg_{window}"] = venue_group[
             "xg_for"
         ].transform(
@@ -155,6 +142,7 @@ def _home_away_features(history: pd.DataFrame) -> pd.DataFrame:
 
 
 def _rest_days(history: pd.DataFrame) -> pd.DataFrame:
+
     history = history.copy()
 
     previous_date = history.groupby("team")["date"].shift(1)
@@ -167,20 +155,13 @@ def _rest_days(history: pd.DataFrame) -> pd.DataFrame:
 
 
 def build_team_features(df: pd.DataFrame) -> pd.DataFrame:
-    """
-    Build leakage-safe team-level features.
-    """
 
     df = df.copy()
-
     df["date"] = pd.to_datetime(df["date"])
 
     history = _team_history(df)
-
     history = _rolling_features(history)
-
     history = _home_away_features(history)
-
     history = _rest_days(history)
 
     return history
@@ -189,13 +170,8 @@ def build_team_features(df: pd.DataFrame) -> pd.DataFrame:
 def build_match_features(
     matches: pd.DataFrame,
 ) -> pd.DataFrame:
-    """
-    Combine home-team and away-team historical features
-    into one prediction-ready row per match.
-    """
 
     matches = matches.copy()
-
     matches["date"] = pd.to_datetime(matches["date"])
 
     history = build_team_features(matches)
@@ -208,50 +184,64 @@ def build_match_features(
         history["venue"] == "away"
     ].copy()
 
-    home_cols = [
+    feature_cols = [
         "match_id",
         "date",
         "team",
+        "matches_before",
+        "xg_3",
         "xg_5",
         "xg_10",
+        "xga_3",
         "xga_5",
         "xga_10",
+        "goals_3",
         "goals_5",
         "goals_10",
+        "goals_against_3",
         "goals_against_5",
         "goals_against_10",
+        "xg_diff_3",
         "xg_diff_5",
         "xg_diff_10",
+        "goal_xg_diff_3",
+        "goal_xg_diff_5",
+        "goal_xg_diff_10",
+        "xg_std_3",
         "xg_std_5",
         "xg_std_10",
+        "venue_xg_3",
         "venue_xg_5",
         "venue_xg_10",
+        "venue_xga_3",
         "venue_xga_5",
         "venue_xga_10",
         "rest_days",
     ]
 
-    away_cols = home_cols.copy()
-
-    # Rename home features with "home_" prefix, but keep team as "home_team"
-    home = home[home_cols].rename(
+    home = home[feature_cols].rename(
         columns={
             c: f"home_{c}"
-            for c in home_cols
+            for c in feature_cols
             if c not in ("match_id", "date", "team")
         }
     )
-    home = home.rename(columns={"team": "home_team"})
 
-    # Rename away features with "away_" prefix, but keep team as "away_team"
-    away = away[away_cols].rename(
+    home = home.rename(
+        columns={"team": "home_team_history"}
+    )
+
+    away = away[feature_cols].rename(
         columns={
             c: f"away_{c}"
-            for c in away_cols
+            for c in feature_cols
             if c not in ("match_id", "date", "team")
         }
     )
-    away = away.rename(columns={"team": "away_team"})
+
+    away = away.rename(
+        columns={"team": "away_team_history"}
+    )
 
     features = matches.merge(
         home,
@@ -265,44 +255,31 @@ def build_match_features(
         how="left",
     )
 
-    # Drop duplicate columns that might have been created
-    features = features.drop(
-        columns=["home_team_home", "away_team_away"],
-        errors="ignore",
-    )
-
     return features
 
 
-def save_features(
-    features: pd.DataFrame,
-    output_file: str | Path,
-) -> None:
-    output_file = Path(output_file)
-    output_file.parent.mkdir(parents=True, exist_ok=True)
-
-    features.to_csv(
-        output_file,
-        index=False,
-    )
-
-
 if __name__ == "__main__":
+
     source = Path(
-        "data/processed/epl_2025_matches.csv"
+        "data/processed/epl_all_matches.csv"
     )
 
     output = Path(
-        "data/processed/epl_2025_features.csv"
+        "data/processed/epl_all_features.csv"
     )
 
     matches = pd.read_csv(source)
 
     features = build_match_features(matches)
 
-    save_features(
-        features,
+    output.parent.mkdir(
+        parents=True,
+        exist_ok=True,
+    )
+
+    features.to_csv(
         output,
+        index=False,
     )
 
     print(f"Matches: {len(features)}")
@@ -310,22 +287,24 @@ if __name__ == "__main__":
     print(f"Saved: {output}")
     print()
 
-    # Preview key features (clean column names)
-    preview_cols = [
+    preview = [
         "date",
         "home_team",
         "away_team",
+        "home_matches_before",
+        "away_matches_before",
         "home_xg_5",
         "home_xga_5",
         "away_xg_5",
         "away_xga_5",
         "home_xg_diff_5",
         "away_xg_diff_5",
+        "home_xg_std_5",
+        "away_xg_std_5",
     ]
-    
-    # Only use columns that actually exist
-    existing_cols = [c for c in preview_cols if c in features.columns]
-    if existing_cols:
-        print(features[existing_cols].head(15).to_string(index=False))
-    else:
-        print("Preview columns not found. Available columns:", features.columns.tolist()[:10])
+
+    print(
+        features[preview]
+        .head(20)
+        .to_string(index=False)
+    )

@@ -1,4 +1,3 @@
-
 #!/usr/bin/env python3
 
 from __future__ import annotations
@@ -234,21 +233,25 @@ def build_match_features(
 
     away_cols = home_cols.copy()
 
+    # Rename home features with "home_" prefix, but keep team as "home_team"
     home = home[home_cols].rename(
         columns={
             c: f"home_{c}"
             for c in home_cols
-            if c not in ("match_id", "date")
+            if c not in ("match_id", "date", "team")
         }
     )
+    home = home.rename(columns={"team": "home_team"})
 
+    # Rename away features with "away_" prefix, but keep team as "away_team"
     away = away[away_cols].rename(
         columns={
             c: f"away_{c}"
             for c in away_cols
-            if c not in ("match_id", "date")
+            if c not in ("match_id", "date", "team")
         }
     )
+    away = away.rename(columns={"team": "away_team"})
 
     features = matches.merge(
         home,
@@ -260,6 +263,12 @@ def build_match_features(
         away,
         on=["match_id", "date"],
         how="left",
+    )
+
+    # Drop duplicate columns that might have been created
+    features = features.drop(
+        columns=["home_team_home", "away_team_away"],
+        errors="ignore",
     )
 
     return features
@@ -301,11 +310,11 @@ if __name__ == "__main__":
     print(f"Saved: {output}")
     print()
 
-    # Preview key features (using correct column names)
+    # Preview key features (clean column names)
     preview_cols = [
         "date",
-        "home_team_x",
-        "away_team_x",
+        "home_team",
+        "away_team",
         "home_xg_5",
         "home_xga_5",
         "away_xg_5",
@@ -314,4 +323,9 @@ if __name__ == "__main__":
         "away_xg_diff_5",
     ]
     
-    print(features[preview_cols].head(15).to_string(index=False))
+    # Only use columns that actually exist
+    existing_cols = [c for c in preview_cols if c in features.columns]
+    if existing_cols:
+        print(features[existing_cols].head(15).to_string(index=False))
+    else:
+        print("Preview columns not found. Available columns:", features.columns.tolist()[:10])
